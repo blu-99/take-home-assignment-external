@@ -33,9 +33,9 @@ class VectorSearchEngine:
         self.openai_client = self._init_openai_client()
         
         if self.vector_available:
-            logger.info("✅ Vector search engine initialized successfully")
+            logger.info("Vector search engine initialized successfully")
         else:
-            logger.warning("⚠️ Vector search not fully available - check embeddings and OpenAI API key")
+            logger.warning("Vector search not fully available - check embeddings and OpenAI API key")
     
     @property
     def vector_available(self) -> bool:
@@ -142,8 +142,31 @@ class VectorSearchEngine:
             )
     
     def _generate_query_embedding(self, query: str) -> Optional[List[float]]:
-        raise NotImplementedError("The method _generate_query_embedding is not yet implemented.")
-    
+        """
+        The method generates an embedding for the query using OpenAI's embedding API.
+        Returns a list of floats.
+        """
+        if not self.openai_client:
+            logger.error("OpenAI client not initialized - check API key")
+            return None
+        
+        try:
+            preview = (query[:40] + "...") if len(query) > 40 else query
+            logger.debug(f"Generating embedding for query preview: \"{preview}\"")
+            
+            response = self.openai_client.embeddings.create(
+                input=query.strip(),
+                model="text-embedding-3-small"
+            )
+            embedding = response.data[0].embedding
+            dimensions = len(embedding)
+            logger.info(f"Query embedding generated successfully, size: dimension={dimensions}")
+            return embedding
+        
+        except Exception as e:
+            logger.error(f"Query embedding request failed: {type(e).__name__}→{e}")
+            return None
+        
     def _search_vectors(self, request: VectorSearchRequest, query_embedding: List[float]) -> pd.DataFrame:
         """Perform vector similarity search."""
         

@@ -1,8 +1,9 @@
 """
 Full-Text Search Engine for SEC Documents API.
-Provides improved DuckDB FTS search capabilities.
+Provides improved DuckDB FTS search capabilities with BM25.
 """
 
+import os
 import time
 import logging
 from typing import List, Optional, Dict, Any
@@ -13,6 +14,7 @@ from search_models import FTSSearchRequest, SearchResponse, SearchResultItem, Se
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_SEARCH_LIMIT = int(os.getenv("DEFAULT_SEARCH_LIMIT", "20"))
 
 class FTSSearchEngine:
     """Full-text search engine using DuckDB FTS with BM25 ranking."""
@@ -28,21 +30,22 @@ class FTSSearchEngine:
         self.fts_available = self._check_fts_availability()
         
         if self.fts_available:
-            logger.info("✅ FTS engine initialized successfully")
+            logger.info("FTS engine initialized: available={self.fts_available}")
         else:
-            logger.warning("⚠️ FTS extension not available - falling back to LIKE search")
+            logger.warning("FTS extension not available - falling back to LIKE search")
     
     def _check_fts_availability(self) -> bool:
         """Check if FTS extension is available and indexes exist."""
         try:
             # Try a simple FTS query to verify functionality
-            result = self.conn.execute("""
+            self.conn.execute("""
                 SELECT COUNT(*) FROM (
                     SELECT fts_main_chunks.match_bm25(chunk_id, 'test') as score
                     FROM chunks
                     LIMIT 1
                 ) test_query WHERE score IS NULL
             """).fetchone()
+            logger.info("Verified FTS extension availability")
             return True
         except Exception as e:
             logger.debug(f"FTS availability check failed: {e}")
@@ -95,20 +98,16 @@ class FTSSearchEngine:
         # Build the base query with improved structure
         base_query = """
             SELECT 
-                chunk_id, cik, filename, section_name, chunk_text, char_count, score
-            FROM (
-                SELECT 
-                    c.chunk_id,
-                    d.cik,
-                    d.filename,
-                    s.section_name,
-                    c.chunk_text,
-                    c.char_count,
-                    fts_main_chunks.match_bm25(c.chunk_id, ?) as score
-                FROM chunks c
-                JOIN sections s ON c.section_id = s.section_id
-                JOIN documents d ON c.doc_id = d.doc_id
-            ) search_results
+                c.chunk_id,
+                d.cik,
+                d.filename,
+                s.section_name,
+                c.chunk_text,
+                c.char_count,
+                fts_main_chunks.match_bm25(c.chunk_id, ?) as score
+            FROM chunks c
+            JOIN sections s ON c.section_id = s.section_id
+            JOIN documents d ON c.doc_id = d.doc_id
             WHERE score IS NOT NULL
         """
         
@@ -141,7 +140,7 @@ class FTSSearchEngine:
             base_query += " AND " + " AND ".join(conditions)
         
         base_query += " ORDER BY score DESC LIMIT ?"
-        params.append(request.limit)
+        params.append(request.limit or DEFAULT_SEARCH_LIMIT)
         
         return self.conn.execute(base_query, params).df()
     
@@ -185,7 +184,7 @@ class FTSSearchEngine:
             query += " AND " + " AND ".join(conditions)
         
         query += " LIMIT ?"
-        params.append(request.limit)
+        params.append(request.limit or DEFAULT_SEARCH_LIMIT)
         
         return self.conn.execute(query, params).df()
     
@@ -219,6 +218,13 @@ class FTSSearchEngine:
             # Get company name
             company_name = self._get_company_name(row.get('cik'))
             
+            fts_score = None
+            if pd.notna(row.get('score')):
+                try:
+                    fts_score = float(row['score'])
+                except Exception:
+                    fts_score = None
+            
             result_item = SearchResultItem(
                 chunk_id=row.get('chunk_id', ''),
                 doc_id=row.get('cik', '') + "_2019",  # Reconstruct doc_id
@@ -228,7 +234,7 @@ class FTSSearchEngine:
                 section_name=row.get('section_name', ''),
                 chunk_text=row.get('chunk_text', ''),
                 char_count=int(row.get('char_count', 0)),
-                fts_score=float(row['score']) if row.get('score') is not None else None
+                fts_score=fts_score
             )
             
             search_results.append(result_item)

@@ -555,6 +555,92 @@ async def search_hybrid_with_explanation(request: HybridSearchRequest) -> Dict[s
         logger.error(f"Hybrid search explanation error: {e}")
         raise HTTPException(status_code=500, detail=f"Hybrid search explanation error: {str(e)}")
 
+@app.get("/companies", response_model=List[CompanyTickerExchange])
+async def list_companies(limit: int = 50) -> List[CompanyTickerExchange]:
+    """
+    Return a simple list of companies with CIK, name, ticker, and exchange.
+    This supports the "Company List" requirement.
+    """
+    try:
+        if db_conn is None:
+            raise HTTPException(status_code=500, detail="Database not connected")
+
+        result = db_conn.execute(
+            "SELECT cik, name, ticker, exchange FROM company_tickers_exchange LIMIT ?",
+            [limit]
+        ).fetchall()
+
+        return [
+            CompanyTickerExchange(
+                cik=row[0], name=row[1], ticker=row[2], exchange=row[3]
+            )
+            for row in result
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching companies: {str(e)}")
+
+
+@app.get("/documents/by-company/{cik}", response_model=List[DocumentMetadata])
+async def list_documents_by_company(cik: str, limit: int = 10) -> List[DocumentMetadata]:
+    """
+    Return all documents for a given company by CIK.
+    This supports the "Document Browser" requirement.
+    """
+    try:
+        if db_conn is None:
+            raise HTTPException(status_code=500, detail="Database not connected")
+
+        result = db_conn.execute(
+            """
+            SELECT d.doc_id, d.cik, d.filename, d.year, d.file_path,
+                   d.total_sections, d.total_chars, d.ingested_at, d.processor_version
+            FROM documents d
+            WHERE d.cik = ?
+            ORDER BY d.year DESC
+            LIMIT ?
+            """,
+            [cik, limit]
+        ).fetchall()
+
+        return [
+            DocumentMetadata(
+                doc_id=row[0], cik=row[1], filename=row[2], year=row[3],
+                file_path=row[4], total_sections=row[5], total_chars=row[6],
+                ingested_at=str(row[7]), processor_version=row[8]
+            )
+            for row in result
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching documents: {str(e)}")
+
+
+@app.get("/sections/{doc_id}")
+async def list_sections(doc_id: str) -> List[Dict[str, Any]]:
+    """
+    Return all sections for a given document ID.
+    This supports drilling into a document's parts in the UI.
+    """
+    try:
+        if db_conn is None:
+            raise HTTPException(status_code=500, detail="Database not connected")
+
+        result = db_conn.execute(
+            """
+            SELECT s.section_id, s.section_name, s.char_count
+            FROM sections s
+            WHERE s.doc_id = ?
+            ORDER BY s.section_id
+            """,
+            [doc_id]
+        ).fetchall()
+
+        return [
+            {"section_id": row[0], "section_name": row[1], "char_count": row[2]}
+            for row in result
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching sections: {str(e)}")
+
 if __name__ == "__main__":
     # Run the server with uvicorn
     uvicorn.run(
